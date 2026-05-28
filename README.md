@@ -39,7 +39,7 @@ Run the server on a known-good machine:
 Then run the client from the affected machine:
 
 ```powershell
-.\http-speed-test.cmd both http://SERVER_IP:8080 --download-size 1G --upload-size 500M --runs 3 --progress
+.\http-speed-test.cmd both http://SERVER_IP:8080 --download-size 1G --upload-size 500M --runs 3 --streams 8 --progress
 ```
 
 If this is over the public internet, allow inbound TCP 8080 on the server firewall or change `--port` to a port you can reach.
@@ -52,6 +52,12 @@ Use this on a Windows client to create `C:\install\speed`, check for Python 3.9+
 powershell -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path C:\install\speed | Out-Null; Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-speed-test.ps1 -OutFile C:\install\speed\install-and-run-speed-test.ps1; & C:\install\speed\install-and-run-speed-test.ps1 -ServerIp SERVER_IP"
 ```
 
+Multistream client test from the same one-liner:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path C:\install\speed | Out-Null; Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-speed-test.ps1 -OutFile C:\install\speed\install-and-run-speed-test.ps1; & C:\install\speed\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Streams 8"
+```
+
 Or, if you already have the repo/files locally:
 
 ```powershell
@@ -61,7 +67,7 @@ Or, if you already have the repo/files locally:
 Optional parameters:
 
 ```powershell
-.\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Port 8080 -DownloadSize 1G -UploadSize 500M -Runs 3
+.\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Port 8080 -DownloadSize 1G -UploadSize 500M -Runs 3 -Streams 8
 ```
 
 This script assumes it is running as the logged-in user. If Python is missing or older than 3.9, it uses:
@@ -136,7 +142,7 @@ sudo apt update && sudo apt install -y python3
 From the Windows client, test against the Linux server:
 
 ```powershell
-.\http-speed-test.cmd both http://LINUX_SERVER_IP:8080 --download-size 1G --upload-size 500M --runs 3 --progress
+.\http-speed-test.cmd both http://LINUX_SERVER_IP:8080 --download-size 1G --upload-size 500M --runs 3 --streams 8 --progress
 ```
 
 For a quick Linux-side sanity check:
@@ -150,7 +156,7 @@ For a quick Linux-side sanity check:
 You can point the download tester at any large direct file URL:
 
 ```powershell
-.\http-speed-test.cmd download "https://example.com/large-test-file.bin" --runs 3 --progress
+.\http-speed-test.cmd download "https://example.com/large-test-file.bin" --runs 3 --streams 8 --progress
 ```
 
 Use `--cache-bust` only when the server accepts arbitrary query parameters:
@@ -164,10 +170,16 @@ Use `--cache-bust` only when the server accepts arbitrary query parameters:
 The included server accepts uploads at `/upload`:
 
 ```powershell
-.\http-speed-test.cmd upload http://SERVER_IP:8080/upload --size 500M --runs 3 --progress
+.\http-speed-test.cmd upload http://SERVER_IP:8080/upload --size 500M --runs 3 --streams 8 --progress
 ```
 
 Most random public websites do not accept large POST bodies, so upload tests are best run against this tool's server or another endpoint you control.
+
+## Multistream Tests
+
+Client tests are single-stream by default. Add `--streams 4`, `--streams 8`, or `--streams 16` to run multiple HTTP connections at the same time and measure aggregate throughput.
+
+For tests against this tool's server, `--download-size` and `--upload-size` are total test sizes split across the streams. For direct arbitrary download URLs, each stream downloads the given URL.
 
 ## Useful Comparisons
 

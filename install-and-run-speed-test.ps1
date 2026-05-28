@@ -10,6 +10,8 @@ param(
 
     [int]$Runs = 3,
 
+    [int]$Streams = 1,
+
     [int]$TimeoutSeconds = 120,
 
     [string]$InstallDir = "C:\install\speed",
@@ -170,6 +172,10 @@ if ($Runs -lt 1) {
     throw "Runs must be at least 1."
 }
 
+if ($Streams -lt 1) {
+    throw "Streams must be at least 1."
+}
+
 if ($Port -lt 1 -or $Port -gt 65535) {
     throw "Port must be between 1 and 65535."
 }
@@ -221,6 +227,8 @@ $testArgs = @(
     $UploadSize,
     "--runs",
     [string]$Runs,
+    "--streams",
+    [string]$Streams,
     "--timeout",
     [string]$TimeoutSeconds
 )
@@ -231,5 +239,6 @@ if (-not $NoProgress) {
 
 Write-Host "Server: $serverUrl"
 Write-Host "Install dir: $InstallDir"
+Write-Host "Streams: $Streams"
 & $python.Exe @($python.PrefixArgs + $testArgs)
 exit $LASTEXITCODE

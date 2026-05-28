@@ -18,12 +18,14 @@ import argparse
 import json
 import ssl
 import sys
+import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from http.client import HTTPConnection, HTTPSConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Dict, Iterable, Optional
+from typing import Callable, Dict, Iterable, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
@@ -61,6 +63,7 @@ class SpeedResult:
     reason: str = ""
     server_seconds: Optional[float] = None
     server_mbps: Optional[float] = None
+    streams: int = 1
 
     @property
     def mbps(self) -> float:
@@ -86,6 +89,25 @@ class ProgressPrinter:
             file=sys.stderr,
         )
         self.last_print = now
+
+
+class AggregateProgress:
+    def __init__(self, label: str, enabled: bool) -> None:
+        self.lock = threading.Lock()
+        self.total_bytes = 0
+        self.started_at = time.perf_counter()
+        self.printer = ProgressPrinter(label, enabled)
+
+    def add(self, byte_count: int) -> None:
+        with self.lock:
+            self.total_bytes += byte_count
+            total = self.total_bytes
+        self.printer.update(total, self.started_at)
+
+    def finish(self) -> None:
+        with self.lock:
+            total = self.total_bytes
+        self.printer.update(total, self.started_at, force=True)
 
 
 def parse_size(value: str | int) -> int:
@@ -137,14 +159,10 @@ def bytes_to_mbps(byte_count: int, seconds: float) -> float:
 
 
 def make_payload_chunk(size: int) -> bytes:
-    """Create deterministic byte noise without depending on os.urandom speed."""
+    """Create a deterministic non-zero payload without per-byte Python work."""
     size = max(size, 1)
-    data = bytearray(size)
-    state = 0xC0FFEE
-    for index in range(size):
-        state = (1103515245 * state + 12345) & 0x7FFFFFFF
-        data[index] = state & 0xFF
-    return bytes(data)
+    pattern = bytes(range(256))
+    return (pattern * ((size // len(pattern)) + 1))[:size]
 
 
 def append_query(url: str, params: Dict[str, str]) -> str:
@@ -160,6 +178,12 @@ def ensure_base_url(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+def split_size(total_bytes: int, parts: int) -> list[int]:
+    base_size = total_bytes // parts
+    remainder = total_bytes % parts
+    return [base_size + (1 if index < remainder else 0) for index in range(parts)]
+
+
 def make_ssl_context(insecure: bool) -> Optional[ssl.SSLContext]:
     if insecure:
         return ssl._create_unverified_context()
@@ -173,6 +197,8 @@ def download_once(
     duration: Optional[float],
     insecure: bool,
     progress: bool,
+    progress_callback: Optional[Callable[[int], None]] = None,
+    progress_label: str = "download",
 ) -> SpeedResult:
     headers = {
         "Cache-Control": "no-cache",
@@ -181,7 +207,7 @@ def download_once(
     }
     request = Request(url, headers=headers)
     context = make_ssl_context(insecure)
-    progress_printer = ProgressPrinter("download", progress)
+    progress_printer = ProgressPrinter(progress_label, progress and progress_callback is None)
     total = 0
     started_at = time.perf_counter()
 
@@ -194,7 +220,10 @@ def download_once(
                 if not chunk:
                     break
                 total += len(chunk)
-                progress_printer.update(total, started_at)
+                if progress_callback:
+                    progress_callback(len(chunk))
+                else:
+                    progress_printer.update(total, started_at)
                 if duration and time.perf_counter() - started_at >= duration:
                     break
     except HTTPError as error:
@@ -203,7 +232,8 @@ def download_once(
         raise RuntimeError(f"download failed: {error.reason}") from error
 
     seconds = time.perf_counter() - started_at
-    progress_printer.update(total, started_at, force=True)
+    if not progress_callback:
+        progress_printer.update(total, started_at, force=True)
     return SpeedResult("download", url, total, seconds, int(status), str(reason))
 
 
@@ -214,6 +244,8 @@ def upload_once(
     timeout: float,
     insecure: bool,
     progress: bool,
+    progress_callback: Optional[Callable[[int], None]] = None,
+    progress_label: str = "upload",
 ) -> SpeedResult:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -243,7 +275,7 @@ def upload_once(
         "User-Agent": USER_AGENT,
     }
     payload = make_payload_chunk(chunk_size)
-    progress_printer = ProgressPrinter("upload", progress)
+    progress_printer = ProgressPrinter(progress_label, progress and progress_callback is None)
     sent = 0
     started_at = time.perf_counter()
 
@@ -259,7 +291,10 @@ def upload_once(
             connection.send(payload[:take])
             sent += take
             remaining -= take
-            progress_printer.update(sent, started_at)
+            if progress_callback:
+                progress_callback(take)
+            else:
+                progress_printer.update(sent, started_at)
 
         response = connection.getresponse()
         body = response.read()
@@ -278,7 +313,8 @@ def upload_once(
     except (ValueError, TypeError, AttributeError):
         pass
 
-    progress_printer.update(sent, started_at, force=True)
+    if not progress_callback:
+        progress_printer.update(sent, started_at, force=True)
     return SpeedResult(
         "upload",
         url,
@@ -291,13 +327,137 @@ def upload_once(
     )
 
 
+def download_many(
+    urls: list[str],
+    display_url: str,
+    chunk_size: int,
+    timeout: float,
+    duration: Optional[float],
+    insecure: bool,
+    progress: bool,
+) -> SpeedResult:
+    streams = len(urls)
+    if streams == 1:
+        return download_once(
+            url=urls[0],
+            chunk_size=chunk_size,
+            timeout=timeout,
+            duration=duration,
+            insecure=insecure,
+            progress=progress,
+        )
+
+    aggregate_progress = AggregateProgress("download", progress)
+    results: list[SpeedResult] = []
+    errors: list[str] = []
+
+    with ThreadPoolExecutor(max_workers=streams) as executor:
+        futures = {
+            executor.submit(
+                download_once,
+                url,
+                chunk_size,
+                timeout,
+                duration,
+                insecure,
+                False,
+                aggregate_progress.add,
+                f"download[{index}]",
+            ): index
+            for index, url in enumerate(urls, start=1)
+        }
+        for future in as_completed(futures):
+            stream_index = futures[future]
+            try:
+                results.append(future.result())
+            except RuntimeError as error:
+                errors.append(f"stream {stream_index}: {error}")
+
+    aggregate_progress.finish()
+    if errors:
+        raise RuntimeError("; ".join(errors[:3]))
+
+    total_bytes = sum(result.bytes_transferred for result in results)
+    seconds = time.perf_counter() - aggregate_progress.started_at
+    status = results[0].status
+    reason = results[0].reason
+    return SpeedResult("download", display_url, total_bytes, seconds, status, reason, streams=streams)
+
+
+def upload_many(
+    url: str,
+    size: int,
+    streams: int,
+    chunk_size: int,
+    timeout: float,
+    insecure: bool,
+    progress: bool,
+) -> SpeedResult:
+    if streams == 1:
+        return upload_once(
+            url=url,
+            size=size,
+            chunk_size=chunk_size,
+            timeout=timeout,
+            insecure=insecure,
+            progress=progress,
+        )
+
+    aggregate_progress = AggregateProgress("upload", progress)
+    results: list[SpeedResult] = []
+    errors: list[str] = []
+    stream_sizes = split_size(size, streams)
+
+    with ThreadPoolExecutor(max_workers=streams) as executor:
+        futures = {
+            executor.submit(
+                upload_once,
+                url,
+                stream_size,
+                chunk_size,
+                timeout,
+                insecure,
+                False,
+                aggregate_progress.add,
+                f"upload[{index}]",
+            ): index
+            for index, stream_size in enumerate(stream_sizes, start=1)
+        }
+        for future in as_completed(futures):
+            stream_index = futures[future]
+            try:
+                results.append(future.result())
+            except RuntimeError as error:
+                errors.append(f"stream {stream_index}: {error}")
+
+    aggregate_progress.finish()
+    if errors:
+        raise RuntimeError("; ".join(errors[:3]))
+
+    total_bytes = sum(result.bytes_transferred for result in results)
+    seconds = time.perf_counter() - aggregate_progress.started_at
+    status = results[0].status
+    reason = results[0].reason
+
+    return SpeedResult(
+        "upload",
+        url,
+        total_bytes,
+        seconds,
+        status,
+        reason,
+        streams=streams,
+    )
+
+
 def print_result(result: SpeedResult) -> None:
     status = f"HTTP {result.status}"
     if result.reason:
         status += f" {result.reason}"
+    stream_text = f"  streams={result.streams}" if result.streams > 1 else ""
     print(
         f"{result.operation:8} {format_bytes(result.bytes_transferred):>11} "
-        f"in {result.seconds:>7.2f}s = {result.mbps:>8.2f} Mbps  {status}"
+        f"in {result.seconds:>7.2f}s = {result.mbps:>8.2f} Mbps  {status}{stream_text}"
     )
     if result.server_mbps is not None and result.server_seconds is not None:
         print(
@@ -494,12 +654,16 @@ def run_server(args: argparse.Namespace) -> int:
 def run_download(args: argparse.Namespace) -> int:
     results: list[SpeedResult] = []
     for run_number in range(1, args.runs + 1):
-        url = args.url
-        if args.cache_bust:
-            url = append_query(url, {"_cb": uuid.uuid4().hex})
-        print(f"Run {run_number}/{args.runs}: download {url}")
-        result = download_once(
-            url=url,
+        urls = []
+        for _ in range(args.streams):
+            url = args.url
+            if args.cache_bust:
+                url = append_query(url, {"_cb": uuid.uuid4().hex})
+            urls.append(url)
+        print(f"Run {run_number}/{args.runs}: download {args.url} with {args.streams} stream(s)")
+        result = download_many(
+            urls=urls,
+            display_url=args.url,
             chunk_size=args.chunk_size,
             timeout=args.timeout,
             duration=args.duration,
@@ -515,10 +679,14 @@ def run_download(args: argparse.Namespace) -> int:
 def run_upload(args: argparse.Namespace) -> int:
     results: list[SpeedResult] = []
     for run_number in range(1, args.runs + 1):
-        print(f"Run {run_number}/{args.runs}: upload {format_bytes(args.size)} to {args.url}")
-        result = upload_once(
+        print(
+            f"Run {run_number}/{args.runs}: upload {format_bytes(args.size)} "
+            f"to {args.url} with {args.streams} stream(s)"
+        )
+        result = upload_many(
             url=args.url,
             size=args.size,
+            streams=args.streams,
             chunk_size=args.chunk_size,
             timeout=args.timeout,
             insecure=args.insecure,
@@ -532,30 +700,36 @@ def run_upload(args: argparse.Namespace) -> int:
 
 def run_both(args: argparse.Namespace) -> int:
     base_url = ensure_base_url(args.base_url)
-    download_url = args.download_url or append_query(
-        f"{base_url}/download",
-        {
-            "size": args.download_size_text,
-            "chunk": str(args.chunk_size),
-            "_cb": uuid.uuid4().hex,
-        },
-    )
+    download_display_url = args.download_url or f"{base_url}/download"
     upload_url = args.upload_url or f"{base_url}/upload"
 
     results: list[SpeedResult] = []
     for run_number in range(1, args.runs + 1):
-        if not args.download_url:
-            download_url = append_query(
-                f"{base_url}/download",
-                {
-                    "size": args.download_size_text,
-                    "chunk": str(args.chunk_size),
-                    "_cb": uuid.uuid4().hex,
-                },
-            )
-        print(f"Run {run_number}/{args.runs}: download {download_url}")
-        download_result = download_once(
-            url=download_url,
+        if args.download_url:
+            download_urls = [args.download_url for _ in range(args.streams)]
+        else:
+            if args.duration:
+                stream_sizes = [args.download_size_text for _ in range(args.streams)]
+            else:
+                stream_sizes = [str(size) for size in split_size(args.download_size, args.streams)]
+            download_urls = [
+                append_query(
+                    f"{base_url}/download",
+                    {
+                        "size": stream_size,
+                        "chunk": str(args.chunk_size),
+                        "_cb": uuid.uuid4().hex,
+                    },
+                )
+                for stream_size in stream_sizes
+            ]
+        print(
+            f"Run {run_number}/{args.runs}: download {args.download_size_text} "
+            f"from {download_display_url} with {args.streams} stream(s)"
+        )
+        download_result = download_many(
+            urls=download_urls,
+            display_url=download_display_url,
             chunk_size=args.chunk_size,
             timeout=args.timeout,
             duration=args.duration,
@@ -565,10 +739,14 @@ def run_both(args: argparse.Namespace) -> int:
         print_result(download_result)
         results.append(download_result)
 
-        print(f"Run {run_number}/{args.runs}: upload {format_bytes(args.upload_size)} to {upload_url}")
-        upload_result = upload_once(
+        print(
+            f"Run {run_number}/{args.runs}: upload {format_bytes(args.upload_size)} "
+            f"to {upload_url} with {args.streams} stream(s)"
+        )
+        upload_result = upload_many(
             url=upload_url,
             size=args.upload_size,
+            streams=args.streams,
             chunk_size=args.chunk_size,
             timeout=args.timeout,
             insecure=args.insecure,
@@ -585,6 +763,7 @@ def add_common_client_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--chunk-size", default="1M", type=parse_size, help="read/write chunk size")
     parser.add_argument("--timeout", default=60.0, type=float, help="socket timeout in seconds")
     parser.add_argument("--runs", default=1, type=int, help="number of repeated test runs")
+    parser.add_argument("--streams", default=1, type=int, help="parallel HTTP streams per test")
     parser.add_argument("--insecure", action="store_true", help="skip HTTPS certificate validation")
     parser.add_argument("--progress", action="store_true", help="print once-per-second progress to stderr")
 
@@ -630,9 +809,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def normalize_args(args: argparse.Namespace) -> argparse.Namespace:
     if hasattr(args, "download_size_text"):
-        parse_size(args.download_size_text)
+        args.download_size = parse_size(args.download_size_text)
     if getattr(args, "runs", 1) < 1:
         raise RuntimeError("--runs must be at least 1")
+    if getattr(args, "streams", 1) < 1:
+        raise RuntimeError("--streams must be at least 1")
     return args
 
 
