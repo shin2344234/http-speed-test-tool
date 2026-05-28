@@ -44,6 +44,32 @@ Then run the client from the affected machine:
 
 If this is over the public internet, allow inbound TCP 8080 on the server firewall or change `--port` to a port you can reach.
 
+## Windows Client Bootstrap
+
+Use this on a Windows client to create `C:\install\speed`, check for Python 3.9+, install Python with winget if needed, download the tool files, and run a test against the server IP you provide.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path C:\install\speed | Out-Null; Invoke-WebRequest -UseBasicParsing https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-speed-test.ps1 -OutFile C:\install\speed\install-and-run-speed-test.ps1; & C:\install\speed\install-and-run-speed-test.ps1 -ServerIp SERVER_IP"
+```
+
+Or, if you already have the repo/files locally:
+
+```powershell
+.\install-and-run-speed-test.ps1 -ServerIp SERVER_IP
+```
+
+Optional parameters:
+
+```powershell
+.\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Port 8080 -DownloadSize 1G -UploadSize 500M -Runs 3
+```
+
+This script assumes it is running as the logged-in user. If Python is missing or older than 3.9, it uses:
+
+```powershell
+winget install -e --id Python.Python.3.13 --scope user --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
+```
+
 ## Linux Server
 
 Copy `http_speed_test.py` and `http-speed-test.sh` to the Linux device, then run:
