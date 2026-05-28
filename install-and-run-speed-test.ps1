@@ -24,7 +24,11 @@ param(
 
     [switch]$Progress,
 
-    [switch]$NoProgress
+    [switch]$NoProgress,
+
+    [switch]$DownloadOnly,
+
+    [switch]$UploadOnly
 )
 
 Set-StrictMode -Version Latest
@@ -182,6 +186,10 @@ if ($Progress -and $NoProgress) {
     throw "Use either -Progress or -NoProgress, not both."
 }
 
+if ($DownloadOnly -and $UploadOnly) {
+    throw "Use either -DownloadOnly or -UploadOnly, not both."
+}
+
 if ($Port -lt 1 -or $Port -gt 65535) {
     throw "Port must be between 1 and 65535."
 }
@@ -223,21 +231,59 @@ foreach ($file in $files) {
 Write-Step "Running speed test"
 $toolPath = Join-Path $InstallDir "http_speed_test.py"
 $serverUrl = "http://$($ServerIp):$Port"
-$testArgs = @(
-    $toolPath,
-    "both",
-    $serverUrl,
-    "--download-size",
-    $DownloadSize,
-    "--upload-size",
-    $UploadSize,
-    "--runs",
-    [string]$Runs,
-    "--streams",
-    [string]$Streams,
-    "--timeout",
-    [string]$TimeoutSeconds
-)
+
+if ($DownloadOnly) {
+    $mode = "download"
+    $targetUrl = "$serverUrl/download?size=$DownloadSize"
+    $testArgs = @(
+        $toolPath,
+        "download",
+        $targetUrl,
+        "--runs",
+        [string]$Runs,
+        "--streams",
+        [string]$Streams,
+        "--timeout",
+        [string]$TimeoutSeconds,
+        "--cache-bust"
+    )
+}
+elseif ($UploadOnly) {
+    $mode = "upload"
+    $targetUrl = "$serverUrl/upload"
+    $testArgs = @(
+        $toolPath,
+        "upload",
+        $targetUrl,
+        "--size",
+        $UploadSize,
+        "--runs",
+        [string]$Runs,
+        "--streams",
+        [string]$Streams,
+        "--timeout",
+        [string]$TimeoutSeconds
+    )
+}
+else {
+    $mode = "both"
+    $targetUrl = $serverUrl
+    $testArgs = @(
+        $toolPath,
+        "both",
+        $serverUrl,
+        "--download-size",
+        $DownloadSize,
+        "--upload-size",
+        $UploadSize,
+        "--runs",
+        [string]$Runs,
+        "--streams",
+        [string]$Streams,
+        "--timeout",
+        [string]$TimeoutSeconds
+    )
+}
 
 if (-not $NoProgress) {
     $testArgs += "--progress"
@@ -246,5 +292,7 @@ if (-not $NoProgress) {
 Write-Host "Server: $serverUrl"
 Write-Host "Install dir: $InstallDir"
 Write-Host "Streams: $Streams"
+Write-Host "Mode: $mode"
+Write-Host "Target: $targetUrl"
 & $python.Exe @($python.PrefixArgs + $testArgs)
 exit $LASTEXITCODE

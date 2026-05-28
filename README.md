@@ -72,6 +72,13 @@ Optional parameters:
 
 Progress output is enabled by default. Use `-NoProgress` to suppress it. `-Progress` is also accepted if you want to be explicit.
 
+To isolate one direction:
+
+```powershell
+.\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Port 8080 -DownloadOnly
+.\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Port 8080 -UploadOnly
+```
+
 This script assumes it is running as the logged-in user. If Python is missing or older than 3.9, it uses:
 
 ```powershell
@@ -182,6 +189,8 @@ The included server accepts uploads at `/upload`:
 ```
 
 Most random public websites do not accept large POST bodies, so upload tests are best run against this tool's server or another endpoint you control.
+
+If downloads work through port 80 but uploads fail after about 1 MB with a connection reset, the request is probably hitting a reverse proxy or web server in front of this tool. Common fixes are to run this tool directly on a high port like `8080` or `9091`, or raise the proxy upload/body limit.
 
 ## Multistream Tests
 
