@@ -7,6 +7,7 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/http-speed-test-tool}"
 REPO_RAW_BASE="${REPO_RAW_BASE:-https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main}"
 BACKGROUND=0
 QUIET=0
+STOP=0
 
 usage() {
   cat <<EOF
@@ -21,6 +22,7 @@ Options:
   --install-dir DIR     Install folder. Default: $INSTALL_DIR
   --repo-raw-base URL   Raw GitHub base URL. Default: $REPO_RAW_BASE
   --background          Start the server with nohup and return
+  --stop                Stop a background server from this install dir or port
   --quiet               Suppress per-request server logging
   --help                Show this help
 
@@ -143,6 +145,69 @@ start_server_background() {
   fi
 }
 
+find_listening_pids() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true
+  elif command -v fuser >/dev/null 2>&1; then
+    fuser "$PORT/tcp" 2>/dev/null || true
+  elif command -v ss >/dev/null 2>&1; then
+    ss -ltnp "sport = :$PORT" 2>/dev/null |
+      sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' |
+      sort -u
+  fi
+}
+
+stop_server() {
+  pid_file="$INSTALL_DIR/server.pid"
+  stopped=0
+
+  step "Stopping server"
+
+  if [ -f "$pid_file" ]; then
+    old_pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [ -n "$old_pid" ] && kill -0 "$old_pid" >/dev/null 2>&1; then
+      echo "Stopping PID $old_pid from $pid_file"
+      kill "$old_pid"
+      stopped=1
+    else
+      echo "Removing stale PID file: $pid_file"
+    fi
+    rm -f "$pid_file"
+  fi
+
+  if [ "$stopped" -eq 0 ]; then
+    pids="$(find_listening_pids)"
+    if [ -n "$pids" ]; then
+      for pid in $pids; do
+        cmdline=""
+        if [ -r "/proc/$pid/cmdline" ]; then
+          cmdline="$(tr '\000' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+        fi
+        case "$cmdline" in
+          *http_speed_test.py*server*)
+            echo "Stopping PID $pid listening on port $PORT"
+            kill "$pid"
+            stopped=1
+            ;;
+          "")
+            echo "PID $pid is listening on port $PORT, but the command line is not readable."
+            echo "Run as the same user/root or stop it manually: kill $pid"
+            ;;
+          *)
+            echo "PID $pid is listening on port $PORT, but it does not look like this tool: $cmdline"
+            ;;
+        esac
+      done
+    fi
+  fi
+
+  if [ "$stopped" -eq 0 ]; then
+    echo "No running HTTP speed test server found for install dir $INSTALL_DIR or port $PORT."
+  else
+    echo "Stop command sent."
+  fi
+}
+
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --host)
@@ -169,6 +234,10 @@ while [ "$#" -gt 0 ]; do
       BACKGROUND=1
       shift
       ;;
+    --stop)
+      STOP=1
+      shift
+      ;;
     --quiet)
       QUIET=1
       shift
@@ -191,6 +260,11 @@ esac
 
 if [ "$PORT" -lt 1 ] || [ "$PORT" -gt 65535 ]; then
   die "Port must be between 1 and 65535."
+fi
+
+if [ "$STOP" -eq 1 ]; then
+  stop_server
+  exit 0
 fi
 
 step "Checking Python"

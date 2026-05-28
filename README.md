@@ -120,10 +120,16 @@ The Linux bootstrap script checks for Python 3.9+, installs Python 3 with the sy
 $HOME/.local/share/http-speed-test-tool
 ```
 
-To stop a background server:
+To stop a background server started by the bootstrap script:
 
 ```bash
-kill "$(cat "$HOME/.local/share/http-speed-test-tool/server.pid")"
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --stop --port 8080
+```
+
+If you used a custom install directory or port:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --stop --port 9090 --install-dir /opt/speed
 ```
 
 Copy `http_speed_test.py` and `http-speed-test.sh` to the Linux device, then run:
