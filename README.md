@@ -78,16 +78,28 @@ One-command deploy from GitHub and run in the foreground:
 curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh
 ```
 
+Set the port in the same one-liner:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --port 9090
+```
+
 For NinjaOne or other remote scripting, start the server in the background:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --background --quiet
 ```
 
+NinjaOne/background with a custom port:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --port 9090 --background --quiet
+```
+
 If the Linux machine has `wget` but not `curl`:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --background --quiet
+wget -qO- https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --port 9090 --background --quiet
 ```
 
 Custom port or install directory:
