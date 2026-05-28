@@ -70,6 +70,8 @@ Optional parameters:
 .\install-and-run-speed-test.ps1 -ServerIp SERVER_IP -Port 8080 -DownloadSize 1G -UploadSize 500M -Runs 3 -Streams 8
 ```
 
+Progress output is enabled by default. Use `-NoProgress` to suppress it. `-Progress` is also accepted if you want to be explicit.
+
 This script assumes it is running as the logged-in user. If Python is missing or older than 3.9, it uses:
 
 ```powershell

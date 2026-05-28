@@ -22,6 +22,8 @@ param(
 
     [version]$MinimumPythonVersion = [version]"3.9",
 
+    [switch]$Progress,
+
     [switch]$NoProgress
 )
 
@@ -174,6 +176,10 @@ if ($Runs -lt 1) {
 
 if ($Streams -lt 1) {
     throw "Streams must be at least 1."
+}
+
+if ($Progress -and $NoProgress) {
+    throw "Use either -Progress or -NoProgress, not both."
 }
 
 if ($Port -lt 1 -or $Port -gt 65535) {
