@@ -72,6 +72,42 @@ winget install -e --id Python.Python.3.13 --scope user --silent --accept-package
 
 ## Linux Server
 
+One-command deploy from GitHub and run in the foreground:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh
+```
+
+For NinjaOne or other remote scripting, start the server in the background:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --background --quiet
+```
+
+If the Linux machine has `wget` but not `curl`:
+
+```bash
+wget -qO- https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --background --quiet
+```
+
+Custom port or install directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/shin2344234/http-speed-test-tool/main/install-and-run-linux-server.sh | sh -s -- --port 8080 --install-dir "$HOME/.local/share/http-speed-test-tool" --background --quiet
+```
+
+The Linux bootstrap script checks for Python 3.9+, installs Python 3 with the system package manager if needed, downloads the current tool files from GitHub, and starts the server. The default install folder is:
+
+```bash
+$HOME/.local/share/http-speed-test-tool
+```
+
+To stop a background server:
+
+```bash
+kill "$(cat "$HOME/.local/share/http-speed-test-tool/server.pid")"
+```
+
 Copy `http_speed_test.py` and `http-speed-test.sh` to the Linux device, then run:
 
 ```bash
